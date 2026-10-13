@@ -49,11 +49,19 @@ free is insufficient. Explicit release invalidates that hold permanently.
 A successful confirmation sells the seat, which cannot be held again within
 this engine.
 
-Repeating release is harmless. Releasing a confirmed hold fails with
+Repeating release fails with `HOLD_RELEASED`, even if that hold is now stale.
+There is no release idempotency. Releasing an expired but unreleased hold succeeds
+and permanently removes its late-confirmation eligibility.
+Releasing a confirmed hold fails with
 `ALREADY_SOLD`; it never reverses a sale. Releasing a stale hold marks only that
 hold as released and cannot change the newer seat owner. Confirmation checks
 explicit release before staleness, and staleness before an already-confirmed
 sale, so overlapping failure conditions have a deterministic error code.
+
+Confirming an already confirmed hold fails with `ALREADY_SOLD`. A valid but
+unknown hold ID fails with `HOLD_NOT_FOUND` for both confirm and release. An
+unseen valid seat ID has status FREE. Failed operations leave seat state intact.
+Null or blank IDs remain invalid input rather than unknown IDs.
 
 The engine stores immutable hold records and an index of each seat's latest hold
 ID. The latest record carries that seat's generation; the index is retained even

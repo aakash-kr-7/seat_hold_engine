@@ -13,3 +13,8 @@ and reviewed state ownership, generation checks, locking, and expiry behavior.
 Codex also implemented atomic batch acquisition and added rollback, idempotency,
 capacity, and coordinated overlapping-batch contention tests. Model-based tests
 and broader engine concurrency stress tests have not been implemented yet.
+
+Codex performed a focused correctness pass across the decisions, engine, and
+existing tests, added lifecycle boundary checks, and changed repeated release to
+an explicit error after recording that decision. The pass covered expiry,
+multi-generation staleness, partial expiry at capacity, and batch rollback.

@@ -147,6 +147,9 @@ public final class SeatHoldEngine {
         try {
             Instant now = clock.instant();
             Hold hold = requireHold(holdId);
+            if (hold.lifecycle() == Hold.Lifecycle.RELEASED) {
+                throw failure(SeatHoldException.Code.HOLD_RELEASED, "Hold was already released");
+            }
             if (hold.lifecycle() == Hold.Lifecycle.CONFIRMED) {
                 throw failure(SeatHoldException.Code.ALREADY_SOLD, "A sale cannot be released");
             }
