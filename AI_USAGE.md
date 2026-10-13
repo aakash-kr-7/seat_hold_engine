@@ -1,40 +1,16 @@
 # AI usage
 
-AI/Codex is being used for implementation assistance, test generation and review,
-and documentation refinement. Architecture and specification decisions are being
-reviewed by the candidate, who remains responsible for understanding and
-explaining the submitted work.
+AI/Codex was used for repository scaffolding, implementation assistance,
+test-case generation and review, and documentation editing. Codex generated
+substantial code and tests; the submission is not claimed to be wholly handwritten.
 
-Codex prepared the initial repository skeleton and decision notes, then migrated
-the scaffold to Java 17 and Maven following the candidate's stack change. It has
-added domain values, a test clock, and focused foundation tests. Codex then
-implemented the single-seat lifecycle, generated clock-driven lifecycle tests,
-and reviewed state ownership, generation checks, locking, and expiry behavior.
-Codex also implemented atomic batch acquisition and added rollback, idempotency,
-capacity, and coordinated overlapping-batch contention tests.
+Work was performed incrementally, with decisions recorded before behavior changes,
+code review, and tests run at each stage. Architecture and ambiguity resolutions
+were checked against the assignment semantics during development. Generated code
+and test results were reviewed with Codex assistance, rather than accepting an
+unchecked complete submission.
 
-Codex performed a focused correctness pass across the decisions, engine, and
-existing tests, added lifecycle boundary checks, and changed repeated release to
-an explicit error after recording that decision. The pass covered expiry,
-multi-generation staleness, partial expiry at capacity, and batch rollback.
-
-Codex added an independent reference model and a seeded randomized comparison
-test. It tried the default seed and four alternate seeds, then verified that a
-temporary expiry-boundary defect was detected at operation 41 with replay
-diagnostics. The temporary defect was restored before the full suite was run;
-this experiment is evidence about the test, not a bug found in the submitted
-engine.
-
-Codex added a concurrent workload with ten workers, six fresh rounds, and 4,800
-random operations. It checks bounded completion, sale counts, final seat shape
-and capacity, and confirmed hold generations through a package-private immutable
-snapshot. A test-side scheduling assumption in the initial stale probe was
-corrected with a gate before random operations; no engine bug was found in that
-failure. The candidate still reviews the decisions and submitted behavior.
-The corrected stress test passed 20 consecutive development runs, followed by
-three successful full Maven suite runs with 74 test executions per run.
-
-Codex reviewed the engine and verification tests for locking, stale generations,
-batch atomicity, error semantics, clock reads, escaping mutable state, and flaky
-test risks. It removed unused clock-result locals while preserving the reads and
-documented wall-clock discontinuities as an unresolved production risk.
+Verification included deterministic edge tests, an independent seeded reference
+model, and real multithreaded stress tests. A temporary expiry defect was detected
+by the randomized test and restored before submission. The candidate remains
+responsible for the final manual review and for explaining the submitted code.

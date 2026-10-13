@@ -1,15 +1,16 @@
 # Seat hold semantics
 
-These decisions are recorded before implementation for the 60-minute assessment.
+Initial semantics were recorded before implementation for the 60-minute
+assessment. This document reflects the final choices and subsequent clarifications.
 
 ## Synchronization
 
 Use one engine-wide `java.util.concurrent.locks.ReentrantLock`. This deliberately
 prioritizes correctness and a simple atomicity boundary over maximum parallel
 throughput. Each operation checks and changes state while holding this lock.
-In particular, `holdMany` is
-atomic: validation and commit share the same lock. Using one lock eliminates
-lock-order deadlocks between overlapping batches. Locking is deliberately
+In particular, `holdMany` is atomic: validation and commit share the same lock.
+Using one lock eliminates lock-order deadlocks between overlapping batches.
+Locking is deliberately
 coarse-grained.
 
 ## Time and expiry
@@ -42,8 +43,8 @@ new hold, not an extension of the expired one.
 
 An expired hold may confirm only if no newer hold generation has ever taken that
 seat. A later successful hold permanently invalidates the stale hold, even if the
-later hold is subsequently released or expires. Merely
-observing lazy expiry does not invalidate this confirmation eligibility.
+later hold is subsequently released or expires. Merely observing lazy expiry
+does not invalidate this confirmation eligibility.
 
 This requires retaining enough hold history or seat-version information to
 distinguish expiry from supersession; checking only whether a seat is currently
@@ -53,10 +54,9 @@ this engine.
 
 Repeating release fails with `HOLD_RELEASED`, even if that hold is now stale.
 There is no release idempotency. Releasing an expired but unreleased hold succeeds
-and permanently removes its late-confirmation eligibility.
-Releasing a confirmed hold fails with
-`ALREADY_SOLD`; it never reverses a sale. Releasing a stale hold marks only that
-hold as released and cannot change the newer seat owner. Confirmation checks
+and permanently removes its late-confirmation eligibility. Releasing a confirmed
+hold fails with `ALREADY_SOLD`; it never reverses a sale. Releasing a stale hold
+marks only that hold as released and cannot change the newer seat owner. Confirmation checks
 explicit release before staleness, and staleness before an already-confirmed
 sale, so overlapping failure conditions have a deterministic error code.
 
