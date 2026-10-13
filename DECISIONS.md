@@ -111,5 +111,14 @@ lifecycle states. Failures use a small `SeatHoldException.Code` enum.
 
 Single-seat lifecycle operations, atomic batch holds, and focused tests are
 implemented. Reversed overlapping batches have a coordinated contention test.
-Model-based tests and broader engine concurrency stress tests remain for later
-steps.
+Model-based verification compares 600 generated operations over six seats and
+four users against a single-threaded history-list model. That model uses explicit
+supersession flags and its own logical time, without engine calls or generation
+indexes. Each operation compares results/error codes and all six seat statuses;
+batch result ordering is compared too.
+
+The default seed is `20261013`; replay with `mvn test -Dseathold.seed=<seed>`.
+Ten fresh 60-operation episodes keep permanent sales from exhausting the small
+seat pool early. Failures include seed, global operation number, description,
+both outcomes, and both sets of seat states. Broader concurrency stress tests
+remain for later steps.

@@ -11,10 +11,17 @@ added domain values, a test clock, and focused foundation tests. Codex then
 implemented the single-seat lifecycle, generated clock-driven lifecycle tests,
 and reviewed state ownership, generation checks, locking, and expiry behavior.
 Codex also implemented atomic batch acquisition and added rollback, idempotency,
-capacity, and coordinated overlapping-batch contention tests. Model-based tests
-and broader engine concurrency stress tests have not been implemented yet.
+capacity, and coordinated overlapping-batch contention tests. Broader engine
+concurrency stress tests have not been implemented yet.
 
 Codex performed a focused correctness pass across the decisions, engine, and
 existing tests, added lifecycle boundary checks, and changed repeated release to
 an explicit error after recording that decision. The pass covered expiry,
 multi-generation staleness, partial expiry at capacity, and batch rollback.
+
+Codex added an independent reference model and a seeded randomized comparison
+test. It tried the default seed and four alternate seeds, then verified that a
+temporary expiry-boundary defect was detected at operation 41 with replay
+diagnostics. The temporary defect was restored before the full suite was run;
+this experiment is evidence about the test, not a bug found in the submitted
+engine.
