@@ -5,5 +5,7 @@ and documentation refinement. Architecture and specification decisions are being
 reviewed by the candidate, who remains responsible for understanding and
 explaining the submitted work.
 
-At this initial step, Codex has prepared the repository skeleton and decision
-notes. No engine implementation or tests have been written yet.
+Codex prepared the initial repository skeleton and decision notes, then migrated
+the scaffold to Java 17 and Maven following the candidate's stack change. It has
+added domain values, a test clock, and focused foundation tests. Engine behavior,
+model-based tests, and engine concurrency tests have not been implemented yet.

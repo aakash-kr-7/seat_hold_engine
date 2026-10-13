@@ -4,23 +4,33 @@ These decisions are recorded before implementation for the 60-minute assessment.
 
 ## Synchronization
 
-Use one engine-wide `threading.RLock`. This deliberately prioritizes correctness
-and a simple atomicity boundary over maximum parallel throughput. Each operation
+Use one engine-wide `java.util.concurrent.locks.ReentrantLock`. This deliberately
+prioritizes correctness and a simple atomicity boundary over maximum parallel
+throughput. Each operation
 checks and changes state while holding this lock. In particular, `hold_many` is
-atomic, and using one lock avoids lock-order deadlocks.
+atomic: validation and commit share the same lock. Using one lock eliminates
+lock-order deadlocks between overlapping batches. Locking is deliberately
+coarse-grained.
 
 ## Time and expiry
 
 Expiry is lazy: operations account for expired holds when inspecting relevant
-state. There is no background worker. Time comes only from an injected `Clock`,
-so tests can advance time without sleeping. The clock supplies nondecreasing time
-in seconds; production time should use a monotonic source. A hold is expired when
-`now >= expires_at`. TTL must be positive.
+state. There is no background worker. Time comes only from a `java.time.Clock`
+injected through the `SeatHoldEngine` constructor; no production clock interface
+is needed. Operations read one logical `now` while holding the engine lock.
+Deadlines are `Instant` values and TTLs are `Duration` values. A hold is expired
+when `currentTime >= expiresAt`. TTL must be positive.
+
+Tests use a thread-safe `MutableClock` with atomic epoch milliseconds and
+`advance(Duration)`, without sleeping. This test helper accepts whole-millisecond
+times and nonnegative advances; sub-millisecond inputs are rejected rather than
+silently rounded. Java's system clock can move backwards; the engine uses the
+injected clock's observed time without inventing a second time source.
 
 ## Repeated holds
 
 Repeating `hold()` for an active seat already held by the same user returns the
-existing `hold_id`. It MUST NOT extend expiry, even if the repeated request has a
+original hold ID. It MUST NOT extend expiry, even if the repeated request has a
 different positive TTL. A seat actively held by another user is unavailable.
 
 After expiry, `hold()` creates a new hold with a new ID and deadline. This is a
@@ -28,15 +38,16 @@ new hold, not an extension of the expired one.
 
 ## Confirmation and stale holds
 
-An expired hold may confirm only if the seat has not transitioned to any newer
-hold or sale since that hold expired. A later hold permanently invalidates the
-stale hold, even if the later hold is subsequently released or expires. Merely
+An expired hold may confirm only if no newer hold generation has ever taken that
+seat. A later successful hold permanently invalidates the stale hold, even if the
+later hold is subsequently released or expires. Merely
 observing lazy expiry does not invalidate this confirmation eligibility.
 
 This requires retaining enough hold history or seat-version information to
 distinguish expiry from supersession; checking only whether a seat is currently
-free is insufficient. A released hold cannot confirm. A successful confirmation
-sells the seat, which cannot be held again within this engine.
+free is insufficient. Explicit release invalidates that hold permanently.
+A successful confirmation sells the seat, which cannot be held again within
+this engine.
 
 ## Batch holds and the seat limit
 
@@ -57,9 +68,20 @@ follow the input seat order.
 
 ## Scope
 
-Use Python 3.12+, pytest, and the standard library wherever possible. Keep state
-in memory. Do not add an HTTP API, database, Redis, Docker, background workers,
-or unnecessary abstraction layers. No CLI is needed for this assessment.
+Use Java 17, Maven, JUnit 5, and almost entirely the Java standard library. There
+are no production dependencies. Keep state in memory. Do not add Spring Boot,
+REST APIs, databases, Redis, Docker, Lombok, dependency injection frameworks,
+background workers, or unnecessary abstraction layers. No CLI is needed.
 
-Concrete result types and error names will be defined with the implementation;
-this skeleton does not claim that an API or tests already exist.
+Hold IDs are opaque to callers. An engine-local sequence such as `hold-1`,
+`hold-2`, ... is sufficient here and supports deterministic tests. It is not a
+globally unique production ID scheme.
+
+`SeatStatus` is an immutable record with FREE, HELD, and SOLD states. `Hold` keeps
+its ID, seat, user, deadline, generation, and ACTIVE/RELEASED/CONFIRMED lifecycle.
+ACTIVE means not explicitly released or confirmed; whether it is unexpired must
+still be checked against time. Expiry and staleness are derived, not extra stored
+lifecycle states. Failures use a small `SeatHoldException.Code` enum.
+
+This step supplies domain values and clock tests only. The engine has no seat
+operations yet; model-based and engine concurrency tests remain for later steps.
