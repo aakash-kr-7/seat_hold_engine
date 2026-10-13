@@ -120,5 +120,18 @@ batch result ordering is compared too.
 The default seed is `20261013`; replay with `mvn test -Dseathold.seed=<seed>`.
 Ten fresh 60-operation episodes keep permanent sales from exhausting the small
 seat pool early. Failures include seed, global operation number, description,
-both outcomes, and both sets of seat states. Broader concurrency stress tests
-remain for later steps.
+both outcomes, and both sets of seat states.
+
+Concurrent invariant verification uses ten gated workers with derived random
+seeds and a shared atomic test clock. Seeded choices do not fix thread scheduling.
+A package-private `holdHistorySnapshot()` returns an immutable list of immutable
+hold records under the engine lock. This lets tests check that every confirmed
+hold belongs to its seat's highest generation; concurrent API return order alone
+cannot reliably establish acquisition order. There is no public diagnostic API.
+Six fresh rounds each run 80 operations per worker, for 4,800 random operations.
+Each round plants an expired hold that was superseded by a later, released hold;
+all workers check its rejection before random work begins. Final checks compare
+successful confirmation counts with history and seat status, forbid confirmed
+older generations, and verify final active capacity and structurally valid
+statuses. Worker failures propagate through bounded futures; expected semantic
+rejections are checked against the operation's allowed codes. No sleep is used.

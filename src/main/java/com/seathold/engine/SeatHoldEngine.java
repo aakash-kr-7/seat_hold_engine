@@ -177,6 +177,16 @@ public final class SeatHoldEngine {
         }
     }
 
+    List<Hold> holdHistorySnapshot() {
+        lock.lock();
+        try {
+            Instant now = clock.instant();
+            return List.copyOf(holds.values());
+        } finally {
+            lock.unlock();
+        }
+    }
+
     private Hold latestHold(String seatId) {
         return holds.get(latestHoldBySeat.get(seatId));
     }
