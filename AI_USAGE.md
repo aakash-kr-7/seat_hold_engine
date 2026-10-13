@@ -33,3 +33,8 @@ corrected with a gate before random operations; no engine bug was found in that
 failure. The candidate still reviews the decisions and submitted behavior.
 The corrected stress test passed 20 consecutive development runs, followed by
 three successful full Maven suite runs with 74 test executions per run.
+
+Codex reviewed the engine and verification tests for locking, stale generations,
+batch atomicity, error semantics, clock reads, escaping mutable state, and flaky
+test risks. It removed unused clock-result locals while preserving the reads and
+documented wall-clock discontinuities as an unresolved production risk.

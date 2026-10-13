@@ -6,8 +6,8 @@ These decisions are recorded before implementation for the 60-minute assessment.
 
 Use one engine-wide `java.util.concurrent.locks.ReentrantLock`. This deliberately
 prioritizes correctness and a simple atomicity boundary over maximum parallel
-throughput. Each operation
-checks and changes state while holding this lock. In particular, `holdMany` is
+throughput. Each operation checks and changes state while holding this lock.
+In particular, `holdMany` is
 atomic: validation and commit share the same lock. Using one lock eliminates
 lock-order deadlocks between overlapping batches. Locking is deliberately
 coarse-grained.
@@ -25,7 +25,9 @@ Tests use a thread-safe `MutableClock` with atomic epoch milliseconds and
 `advance(Duration)`, without sleeping. This test helper accepts whole-millisecond
 times and nonnegative advances; sub-millisecond inputs are rejected rather than
 silently rounded. Java's system clock can move backwards; the engine uses the
-injected clock's observed time without inventing a second time source.
+injected clock's observed time without inventing a second time source. Remaining
+clock-discontinuity risk and production mitigations are described in
+[BUGS_I_FEAR.md](BUGS_I_FEAR.md); those mitigations are not implemented here.
 
 ## Repeated holds
 
@@ -98,6 +100,8 @@ Use Java 17, Maven, JUnit 5, and almost entirely the Java standard library. Ther
 are no production dependencies. Keep state in memory. Do not add Spring Boot,
 REST APIs, databases, Redis, Docker, Lombok, dependency injection frameworks,
 background workers, or unnecessary abstraction layers. No CLI is needed.
+This is a single-process library: state is lost on restart and coordination does
+not extend to other engine instances or machines.
 
 Hold IDs are opaque to callers. An engine-local sequence such as `hold-1`,
 `hold-2`, ... is sufficient here and supports deterministic tests. It is not a

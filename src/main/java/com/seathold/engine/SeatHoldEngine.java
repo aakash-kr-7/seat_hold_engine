@@ -92,7 +92,7 @@ public final class SeatHoldEngine {
             }
             Instant expiresAt = newCount == 0 ? null : deadline(now, ttl);
 
-            // Stage records and sequence locally so even deadline/version overflow cannot partially commit.
+            // Stage records and IDs so generation or sequence overflow cannot partially commit.
             var newHolds = new ArrayList<Hold>();
             Map<String, String> result = new LinkedHashMap<>();
             long sequence = holdSequence;
@@ -123,7 +123,7 @@ public final class SeatHoldEngine {
     public void confirm(String holdId) {
         lock.lock();
         try {
-            Instant now = clock.instant();
+            clock.instant();
             Hold hold = requireHold(holdId);
             if (hold.lifecycle() == Hold.Lifecycle.RELEASED) {
                 throw failure(SeatHoldException.Code.HOLD_RELEASED, "Hold was released");
@@ -145,7 +145,7 @@ public final class SeatHoldEngine {
     public void release(String holdId) {
         lock.lock();
         try {
-            Instant now = clock.instant();
+            clock.instant();
             Hold hold = requireHold(holdId);
             if (hold.lifecycle() == Hold.Lifecycle.RELEASED) {
                 throw failure(SeatHoldException.Code.HOLD_RELEASED, "Hold was already released");
@@ -180,7 +180,7 @@ public final class SeatHoldEngine {
     List<Hold> holdHistorySnapshot() {
         lock.lock();
         try {
-            Instant now = clock.instant();
+            clock.instant();
             return List.copyOf(holds.values());
         } finally {
             lock.unlock();
