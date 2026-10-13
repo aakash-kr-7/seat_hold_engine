@@ -139,3 +139,12 @@ successful confirmation counts with history and seat status, forbid confirmed
 older generations, and verify final active capacity and structurally valid
 statuses. Worker failures propagate through bounded futures; expected semantic
 rejections are checked against the operation's allowed codes. No sleep is used.
+
+Short concurrent histories supplement final-state stress assertions. Three
+workers execute six calls per run across 25 runs, recording invocation and return
+order, results, and errors. A bounded search checks for a legal reference-model
+execution matching every outcome and final state. Calls that finish before
+another starts must precede it; overlapping calls may be ordered either way.
+The checker is tested against fabricated double allocation and impossible status
+ordering. This verifies observed histories without changing production locking
+or claiming to exhaustively prove every possible interleaving.

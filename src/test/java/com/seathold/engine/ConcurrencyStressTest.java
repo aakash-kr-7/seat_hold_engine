@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -21,6 +22,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -221,6 +224,163 @@ class ConcurrencyStressTest {
     }
 
     private record Owner(String seat, String user) { }
+
+    @Test
+    void shortConcurrentHistoriesMatchTheReferenceModel() throws Exception {
+        String context = "base seed=" + BASE_SEED;
+        var random = new Random(BASE_SEED);
+        var executor = Executors.newFixedThreadPool(3, task -> {
+            Thread thread = new Thread(task);
+            thread.setDaemon(true);
+            return thread;
+        });
+        Instant initial = Instant.parse("2026-01-01T00:00:00Z");
+        try {
+            for (int round = 0; round < 25; round++) {
+                var clock = new MutableClock(initial, ZoneOffset.UTC);
+                var engine = new SeatHoldEngine(clock);
+                for (String seat : List.of("S1", "S2", "S3")) {
+                    engine.hold(seat, "alice", Duration.ofMillis(2));
+                }
+                var calls = new ArrayList<>(List.of(
+                        new HistoryCall("hold(S2, bob)",
+                                e -> e.hold("S2", "bob", Duration.ofMillis(5)),
+                                m -> m.hold("S2", "bob", Duration.ofMillis(5))),
+                        new HistoryCall("holdMany(alice, [S2, S4, S5])",
+                                e -> e.holdMany("alice", List.of("S2", "S4", "S5"), Duration.ofMillis(5)),
+                                m -> m.holdMany("alice", List.of("S2", "S4", "S5"), Duration.ofMillis(5))),
+                        new HistoryCall("confirm(hold-2)",
+                                e -> { e.confirm("hold-2"); return "OK"; },
+                                m -> { m.confirm("hold-2"); return "OK"; }),
+                        new HistoryCall("release(hold-2)",
+                                e -> { e.release("hold-2"); return "OK"; },
+                                m -> { m.release("hold-2"); return "OK"; }),
+                        new HistoryCall("seatStatus(S2)", e -> e.seatStatus("S2"), m -> m.seatStatus("S2")),
+                        new HistoryCall("advance(2ms)",
+                                e -> { clock.advance(Duration.ofMillis(2)); return "OK"; },
+                                m -> { m.advance(Duration.ofMillis(2)); return "OK"; })));
+                Collections.shuffle(calls, random);
+                var history = new ConcurrentLinkedQueue<HistoryEntry>();
+                var sequence = new AtomicLong();
+                var ready = new CountDownLatch(3);
+                var start = new CountDownLatch(1);
+                var futures = new ArrayList<Future<?>>();
+                for (int worker = 0; worker < 3; worker++) {
+                    int offset = worker * 2;
+                    futures.add(executor.submit(() -> {
+                        ready.countDown();
+                        assertTrue(start.await(5, TimeUnit.SECONDS), context + ": history gate timed out");
+                        for (int index = offset; index < offset + 2; index++) {
+                            HistoryCall call = calls.get(index);
+                            long invoked = sequence.incrementAndGet();
+                            HistoryResult result = historyResult(() -> call.production.apply(engine));
+                            long returned = sequence.incrementAndGet();
+                            history.add(new HistoryEntry(call, invoked, returned, result));
+                        }
+                        return null;
+                    }));
+                }
+                try {
+                    assertTrue(ready.await(5, TimeUnit.SECONDS), context + ": history workers not ready");
+                    start.countDown();
+                    for (Future<?> future : futures) {
+                        future.get(5, TimeUnit.SECONDS);
+                    }
+                } catch (ExecutionException | TimeoutException exception) {
+                    throw new AssertionError(context + ", round=" + round + ": history worker failed", exception);
+                } finally {
+                    start.countDown();
+                }
+                var finalStates = new HashMap<String, SeatStatus>();
+                SEATS.forEach(seat -> finalStates.put(seat, engine.seatStatus(seat)));
+                List<HistoryEntry> entries = List.copyOf(history);
+                assertEquals(6, entries.size(), context + ": incomplete history");
+                assertTrue(hasLegalHistory(entries, new ArrayList<>(), finalStates, initial),
+                        context + ", round=" + round + ": no legal sequential history: " + entries
+                                + ", final states=" + finalStates);
+            }
+        } finally {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), context + ": history workers did not stop");
+        }
+    }
+
+    @Test
+    void historyCheckerRejectsDoubleAllocationAndImpossibleOrdering() {
+        String context = "base seed=" + BASE_SEED;
+        Instant initial = Instant.parse("2026-01-01T00:00:00Z");
+        var states = new HashMap<String, SeatStatus>();
+        SEATS.forEach(seat -> states.put(seat, List.of("S1", "S2", "S3").contains(seat)
+                ? SeatStatus.held("alice", initial.plusMillis(2)) : SeatStatus.free()));
+        states.put("S6", SeatStatus.held("bob", initial.plusMillis(5)));
+        var bob = new HistoryCall("hold(S6, bob)",
+                e -> e.hold("S6", "bob", Duration.ofMillis(5)),
+                m -> m.hold("S6", "bob", Duration.ofMillis(5)));
+        var carol = new HistoryCall("hold(S6, carol)",
+                e -> e.hold("S6", "carol", Duration.ofMillis(5)),
+                m -> m.hold("S6", "carol", Duration.ofMillis(5)));
+        var status = new HistoryCall("seatStatus(S6)", e -> e.seatStatus("S6"), m -> m.seatStatus("S6"));
+        var hold = new HistoryEntry(bob, 1, 3, new HistoryResult("hold-4", null));
+        assertTrue(hasLegalHistory(List.of(hold), new ArrayList<>(), states, initial), context);
+        assertFalse(hasLegalHistory(List.of(hold,
+                new HistoryEntry(carol, 2, 4, new HistoryResult("hold-5", null))),
+                new ArrayList<>(), states, initial), context + ": accepted double allocation");
+        assertFalse(hasLegalHistory(List.of(hold,
+                new HistoryEntry(status, 4, 5, new HistoryResult(SeatStatus.free(), null))),
+                new ArrayList<>(), states, initial), context + ": ignored real-time ordering");
+    }
+
+    // Overlapping calls may appear in either order; completed-before-invoked calls must retain their order.
+    private static boolean hasLegalHistory(List<HistoryEntry> remaining, List<HistoryEntry> ordered,
+                                           Map<String, SeatStatus> finalStates, Instant initial) {
+        var model = new ReferenceSeatHoldModel(initial);
+        for (String seat : List.of("S1", "S2", "S3")) {
+            model.hold(seat, "alice", Duration.ofMillis(2));
+        }
+        for (HistoryEntry entry : ordered) {
+            if (!entry.result.equals(historyResult(() -> entry.call.reference.apply(model)))) {
+                return false;
+            }
+        }
+        if (remaining.isEmpty()) {
+            return finalStates.entrySet().stream().allMatch(entry -> entry.getValue().equals(model.seatStatus(entry.getKey())));
+        }
+        for (HistoryEntry candidate : remaining) {
+            if (remaining.stream().anyMatch(other -> other.returned < candidate.invoked)) {
+                continue;
+            }
+            var rest = new ArrayList<>(remaining);
+            rest.remove(candidate);
+            ordered.add(candidate);
+            boolean matches = hasLegalHistory(rest, ordered, finalStates, initial);
+            ordered.remove(ordered.size() - 1);
+            if (matches) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static HistoryResult historyResult(java.util.function.Supplier<Object> operation) {
+        try {
+            Object value = operation.get();
+            if (value instanceof Map<?, ?> map) {
+                value = map.entrySet().stream().map(entry -> Map.entry(entry.getKey(), entry.getValue())).toList();
+            }
+            return new HistoryResult(value, null);
+        } catch (SeatHoldException exception) {
+            return new HistoryResult(null, exception.code());
+        }
+    }
+
+    private record HistoryCall(String description, Function<SeatHoldEngine, Object> production,
+                               Function<ReferenceSeatHoldModel, Object> reference) {
+        @Override
+        public String toString() { return description; }
+    }
+
+    private record HistoryResult(Object value, SeatHoldException.Code error) { }
+    private record HistoryEntry(HistoryCall call, long invoked, long returned, HistoryResult result) { }
 
     @RepeatedTest(10)
     void reversedOverlappingBatchesHaveOneCompleteWinner() throws Exception {

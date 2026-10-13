@@ -3,6 +3,27 @@
 A small Java 17 library for concurrency-safe ticket seat holds. It keeps state
 in memory, uses one lock for atomic operations, and has no production dependencies.
 
+```mermaid
+flowchart LR
+    requests["Concurrent holdMany requests"] --> now
+    subgraph transaction["One engine-wide ReentrantLock"]
+        now["Read clock once"] --> validate{"Validate every seat<br/>and user capacity"}
+        validate -->|Pass| commit["Commit the whole batch"]
+        validate -->|Fail| reject["Leave state unchanged"]
+    end
+    commit --> result["Return ordered hold IDs"]
+
+    classDef entry fill:#172554,stroke:#3b82f6,color:#ffffff;
+    classDef check fill:#ecfeff,stroke:#0891b2,color:#164e63;
+    classDef success fill:#ecfdf5,stroke:#10b981,color:#064e3b;
+    classDef failure fill:#fff1f2,stroke:#fb7185,color:#881337;
+    class requests,result entry;
+    class now,validate check;
+    class commit success;
+    class reject failure;
+    style transaction fill:#f8fafc,stroke:#94a3b8,color:#334155
+```
+
 ## Problem
 
 Seats are temporarily held while payment occurs. Concurrent callers must never
@@ -125,6 +146,9 @@ semantic failures without requiring callers to parse messages.
    and 4,800 operations across six rounds. It checks bounded completion, sale
    counts, capacity, status validity, and confirmed generations. A separate
    opposite-order batch test checks that exactly one whole batch wins.
+   A history test records all six operations in each of 25 short concurrent runs
+   and checks their outcomes against legal reference-model executions, preserving
+   real-time call ordering. This catches invalid intermediate observations too.
 
 Randomized and stress failures include their seeds. Randomized failures also show
 the operation, both outcomes, and all seat states. Stress assertions do not assume
