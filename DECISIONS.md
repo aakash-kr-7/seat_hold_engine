@@ -49,6 +49,18 @@ free is insufficient. Explicit release invalidates that hold permanently.
 A successful confirmation sells the seat, which cannot be held again within
 this engine.
 
+Repeating release is harmless. Releasing a confirmed hold fails with
+`ALREADY_SOLD`; it never reverses a sale. Releasing a stale hold marks only that
+hold as released and cannot change the newer seat owner. Confirmation checks
+explicit release before staleness, and staleness before an already-confirmed
+sale, so overlapping failure conditions have a deterministic error code.
+
+The engine stores immutable hold records and an index of each seat's latest hold
+ID. The latest record carries that seat's generation; the index is retained even
+after release or expiry. Counts and seat status are derived from those records
+under the lock. Hold history is retained for this in-memory assessment rather
+than purged in a way that loses late-confirmation or stale-hold information.
+
 ## Batch holds and the seat limit
 
 `hold_many` is all-or-nothing: validate the whole request and check availability
@@ -83,5 +95,5 @@ ACTIVE means not explicitly released or confirmed; whether it is unexpired must
 still be checked against time. Expiry and staleness are derived, not extra stored
 lifecycle states. Failures use a small `SeatHoldException.Code` enum.
 
-This step supplies domain values and clock tests only. The engine has no seat
-operations yet; model-based and engine concurrency tests remain for later steps.
+Single-seat lifecycle operations and focused tests are implemented. Batch holds,
+model-based tests, and engine concurrency stress tests remain for later steps.
