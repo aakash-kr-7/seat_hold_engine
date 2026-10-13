@@ -7,7 +7,7 @@ These decisions are recorded before implementation for the 60-minute assessment.
 Use one engine-wide `java.util.concurrent.locks.ReentrantLock`. This deliberately
 prioritizes correctness and a simple atomicity boundary over maximum parallel
 throughput. Each operation
-checks and changes state while holding this lock. In particular, `hold_many` is
+checks and changes state while holding this lock. In particular, `holdMany` is
 atomic: validation and commit share the same lock. Using one lock eliminates
 lock-order deadlocks between overlapping batches. Locking is deliberately
 coarse-grained.
@@ -63,20 +63,26 @@ than purged in a way that loses late-confirmation or stale-hold information.
 
 ## Batch holds and the seat limit
 
-`hold_many` is all-or-nothing: validate the whole request and check availability
+`holdMany` is all-or-nothing: validate the whole request and check availability
 and capacity before creating any new holds. Failure creates no partial batch.
 Lazy expiry still applies when evaluating the request.
 
 Interpret the four-seat limit as a maximum of four active held seats per user
 across the engine. Expired, released, and sold seats do not consume hold capacity.
 Seats already actively held by the requesting user count once toward that total;
-including them in `hold_many` does not consume another slot. Return their existing
+including them in `holdMany` does not consume another slot. Return their existing
 IDs without extending their deadlines.
 
-Duplicate seat IDs in `hold_many` are invalid input, even when they refer to an
+Duplicate seat IDs in `holdMany` are invalid input, even when they refer to an
 idempotently held seat. An empty batch is invalid input. Use one clock reading for
 each operation, so all new holds in a batch share the same deadline. Batch results
 follow the input seat order.
+
+Batch validation allocates no hold IDs and changes no engine state. After input,
+availability, capacity, and deadline checks pass, new records are staged locally
+before publishing them under the same lock. Failed requests retain ownership,
+hold history, generations, and the next ID sequence. The returned `LinkedHashMap`
+is detached from engine state and follows requested seat order.
 
 ## Scope
 
@@ -95,5 +101,7 @@ ACTIVE means not explicitly released or confirmed; whether it is unexpired must
 still be checked against time. Expiry and staleness are derived, not extra stored
 lifecycle states. Failures use a small `SeatHoldException.Code` enum.
 
-Single-seat lifecycle operations and focused tests are implemented. Batch holds,
-model-based tests, and engine concurrency stress tests remain for later steps.
+Single-seat lifecycle operations, atomic batch holds, and focused tests are
+implemented. Reversed overlapping batches have a coordinated contention test.
+Model-based tests and broader engine concurrency stress tests remain for later
+steps.

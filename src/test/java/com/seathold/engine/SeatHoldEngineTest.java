@@ -5,6 +5,9 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -326,6 +329,194 @@ class SeatHoldEngineTest {
         engine.confirm(id);
         assertEquals(SeatStatus.held("alice", DEADLINE), snapshot);
         assertEquals(SeatStatus.sold("alice"), engine.seatStatus("A1"));
+    }
+
+    @Test
+    void twoSeatBatchReturnsRequestedOrderAndCommonDeadline() {
+        var result = engine.holdMany("alice", List.of("B", "A"), TTL);
+        assertEquals(List.of("B", "A"), new ArrayList<>(result.keySet()));
+        assertNotEquals(result.get("A"), result.get("B"));
+        assertEquals(SeatStatus.held("alice", DEADLINE), engine.seatStatus("A"));
+        assertEquals(SeatStatus.held("alice", DEADLINE), engine.seatStatus("B"));
+        engine.confirm(result.get("A"));
+        engine.confirm(result.get("B"));
+    }
+
+    @Test
+    void batchCanAcquireExactlyFourSeats() {
+        var result = engine.holdMany("alice", List.of("A", "B", "C", "D"), TTL);
+        assertEquals(4, result.size());
+        for (String seat : result.keySet()) {
+            assertEquals(SeatStatus.held("alice", DEADLINE), engine.seatStatus(seat));
+        }
+    }
+
+    @Test
+    void fiveSeatBatchFailsWithoutAcquiringAnySeat() {
+        var seats = List.of("A", "B", "C", "D", "E");
+        assertCode(SeatHoldException.Code.USER_HOLD_LIMIT, () -> engine.holdMany("alice", seats, TTL));
+        for (String seat : seats) {
+            assertEquals(SeatStatus.free(), engine.seatStatus(seat));
+        }
+        assertEquals("hold-1", engine.hold("E", "alice", TTL));
+    }
+
+    @Test
+    void unavailableSeatRejectsBatchWithoutAdvancingSequenceOrCreatingRecords() {
+        String bobId = engine.hold("B", "bob", TTL);
+        assertCode(SeatHoldException.Code.SEAT_UNAVAILABLE,
+                () -> engine.holdMany("alice", List.of("A", "B"), TTL));
+        assertEquals(SeatStatus.free(), engine.seatStatus("A"));
+        assertEquals(SeatStatus.held("bob", DEADLINE), engine.seatStatus("B"));
+        assertCode(SeatHoldException.Code.HOLD_NOT_FOUND, () -> engine.confirm("hold-2"));
+        assertEquals("hold-2", engine.hold("A", "alice", TTL));
+        engine.confirm(bobId);
+    }
+
+    @Test
+    void soldSeatRejectsEntireBatch() {
+        String id = engine.hold("B", "bob", TTL);
+        engine.confirm(id);
+        assertCode(SeatHoldException.Code.ALREADY_SOLD,
+                () -> engine.holdMany("alice", List.of("A", "B"), TTL));
+        assertEquals(SeatStatus.free(), engine.seatStatus("A"));
+        assertEquals(SeatStatus.sold("bob"), engine.seatStatus("B"));
+        assertEquals("hold-2", engine.hold("A", "alice", TTL));
+    }
+
+    @Test
+    void mixedBatchPreservesExistingIdsAndExpiriesWithoutDoubleCounting() {
+        String a = engine.hold("A", "alice", TTL);
+        String b = engine.hold("B", "alice", Duration.ofMinutes(2));
+        clock.advance(Duration.ofSeconds(30));
+        var result = engine.holdMany("alice", List.of("A", "B", "C", "D"), Duration.ofHours(1));
+        assertEquals(a, result.get("A"));
+        assertEquals(b, result.get("B"));
+        assertEquals(SeatStatus.held("alice", DEADLINE), engine.seatStatus("A"));
+        assertEquals(SeatStatus.held("alice", START.plusSeconds(120)), engine.seatStatus("B"));
+        assertEquals(SeatStatus.held("alice", clock.instant().plusSeconds(3_600)), engine.seatStatus("C"));
+        assertCode(SeatHoldException.Code.USER_HOLD_LIMIT,
+                () -> engine.holdMany("alice", List.of("A", "B", "C", "D", "E"), TTL));
+        assertEquals(SeatStatus.free(), engine.seatStatus("E"));
+        engine.confirm(a);
+        engine.confirm(b);
+    }
+
+    @Test
+    void entirelyIdempotentBatchAtLimitPreservesGenerationsAndSequence() {
+        var seats = List.of("A", "B", "C", "D");
+        var original = engine.holdMany("alice", seats, TTL);
+        clock.advance(Duration.ofSeconds(1));
+        assertEquals(original, engine.holdMany("alice", seats, Duration.ofHours(1)));
+        for (String id : original.values()) {
+            engine.confirm(id);
+        }
+        assertEquals("hold-5", engine.hold("E", "alice", TTL));
+    }
+
+    @Test
+    void activeHoldsOutsideBatchCountTowardLimit() {
+        engine.hold("A", "alice", TTL);
+        engine.hold("B", "alice", TTL);
+        assertCode(SeatHoldException.Code.USER_HOLD_LIMIT,
+                () -> engine.holdMany("alice", List.of("C", "D", "E"), TTL));
+        for (String seat : List.of("C", "D", "E")) {
+            assertEquals(SeatStatus.free(), engine.seatStatus(seat));
+        }
+        assertEquals(2, engine.holdMany("alice", List.of("C", "D"), TTL).size());
+    }
+
+    @Test
+    void expiredSeatsAreNewAcquisitionsAndOldHoldsStayStaleAfterRelease() {
+        var original = engine.holdMany("alice", List.of("A", "B", "C", "D"), TTL);
+        clock.advance(TTL);
+        var renewed = engine.holdMany("alice", List.of("B", "A", "C", "D"), TTL);
+        for (String seat : original.keySet()) {
+            assertNotEquals(original.get(seat), renewed.get(seat));
+            assertEquals(SeatStatus.held("alice", DEADLINE.plus(TTL)), engine.seatStatus(seat));
+            engine.release(renewed.get(seat));
+            assertCode(SeatHoldException.Code.HOLD_STALE, () -> engine.confirm(original.get(seat)));
+        }
+    }
+
+    @Test
+    void rejectedBatchDoesNotSupersedeExpiredHoldOrChangeExistingRetry() {
+        String oldId = engine.hold("A", "alice", TTL);
+        String currentId = engine.hold("C", "alice", Duration.ofHours(1));
+        engine.hold("B", "bob", Duration.ofHours(1));
+        clock.advance(TTL);
+        assertCode(SeatHoldException.Code.SEAT_UNAVAILABLE,
+                () -> engine.holdMany("alice", List.of("A", "C", "B"), TTL));
+        assertEquals(SeatStatus.free(), engine.seatStatus("A"));
+        assertEquals(currentId, engine.hold("C", "alice", TTL));
+        assertEquals(SeatStatus.held("alice", START.plusSeconds(3_600)), engine.seatStatus("C"));
+        engine.confirm(oldId);
+        assertEquals("hold-4", engine.hold("D", "alice", TTL));
+    }
+
+    @Test
+    void duplicateSeatsAreRejectedEvenIfAlreadyHeldBySameUser() {
+        String id = engine.hold("A", "alice", TTL);
+        assertCode(SeatHoldException.Code.INVALID_ARGUMENT,
+                () -> engine.holdMany("alice", List.of("B", "A", "A"), TTL));
+        assertEquals(SeatStatus.free(), engine.seatStatus("B"));
+        assertEquals(id, engine.hold("A", "alice", TTL));
+        assertCode(SeatHoldException.Code.INVALID_ARGUMENT,
+                () -> engine.holdMany("alice", List.of("B", "B"), TTL));
+        assertEquals("hold-2", engine.hold("B", "alice", TTL));
+    }
+
+    @Test
+    void nullAndEmptyBatchListsAreInvalid() {
+        assertCode(SeatHoldException.Code.INVALID_ARGUMENT, () -> engine.holdMany("alice", null, TTL));
+        assertCode(SeatHoldException.Code.INVALID_ARGUMENT, () -> engine.holdMany("alice", List.of(), TTL));
+        assertEquals("hold-1", engine.hold("A", "alice", TTL));
+    }
+
+    @Test
+    void invalidBatchIdsAreRejectedBeforeAnyAcquisition() {
+        for (String invalid : new String[] { null, "", " \t\n" }) {
+            assertCode(SeatHoldException.Code.INVALID_ARGUMENT,
+                    () -> engine.holdMany(invalid, List.of("A"), TTL));
+            assertCode(SeatHoldException.Code.INVALID_ARGUMENT,
+                    () -> engine.holdMany("alice", Arrays.asList("A", invalid), TTL));
+        }
+        assertEquals(SeatStatus.free(), engine.seatStatus("A"));
+        assertEquals("hold-1", engine.hold("A", "alice", TTL));
+    }
+
+    @Test
+    void invalidBatchTtlsDoNotChangeState() {
+        for (Duration invalid : new Duration[] { null, Duration.ZERO, Duration.ofNanos(-1) }) {
+            assertCode(SeatHoldException.Code.INVALID_ARGUMENT,
+                    () -> engine.holdMany("alice", List.of("A", "B"), invalid));
+        }
+        assertEquals(SeatStatus.free(), engine.seatStatus("A"));
+        assertEquals(SeatStatus.free(), engine.seatStatus("B"));
+        assertEquals("hold-1", engine.hold("A", "alice", TTL));
+    }
+
+    @Test
+    void batchDeadlineOverflowDoesNotChangeGenerationRecordsOrSequence() {
+        String oldId = engine.hold("A", "alice", TTL);
+        clock.advance(TTL);
+        assertCode(SeatHoldException.Code.INVALID_ARGUMENT,
+                () -> engine.holdMany("bob", List.of("B", "A"), Duration.ofSeconds(Long.MAX_VALUE)));
+        assertEquals(SeatStatus.free(), engine.seatStatus("B"));
+        engine.confirm(oldId);
+        assertEquals("hold-2", engine.hold("B", "alice", TTL));
+    }
+
+    @Test
+    void returnedBatchMapIsDetachedFromEngineState() {
+        var result = engine.holdMany("alice", List.of("A", "B"), TTL);
+        String a = result.get("A");
+        result.clear();
+        result.put("C", "invented-id");
+        assertEquals(SeatStatus.held("alice", DEADLINE), engine.seatStatus("A"));
+        assertEquals(SeatStatus.held("alice", DEADLINE), engine.seatStatus("B"));
+        assertEquals(SeatStatus.free(), engine.seatStatus("C"));
+        engine.confirm(a);
     }
 
     private static void assertCode(SeatHoldException.Code code, Runnable operation) {
